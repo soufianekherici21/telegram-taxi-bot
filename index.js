@@ -7,10 +7,10 @@ require("dotenv").config();
 
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 const binId = process.env.JSONBIN_BOOKINGS_ID;
+const driversBin = process.env.JSONBIN_DRIVERS_ID;
 const apiKey = process.env.JSONBIN_API_KEY;
 const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 
-// إعداد Express مع CORS
 const app = express();
 app.use(
   cors({
@@ -21,7 +21,9 @@ app.use(
 );
 app.use(express.json());
 
-// ✅ استقبال طلبات من النموذج
+const registerState = {}; // لتتبع حالة التسجيل لكل مستخدم
+
+// ✅ استقبال طلبات الحجز
 app.post("/api/booking", async (req, res) => {
   const data = req.body;
   console.log("📦 البيانات المستلمة من النموذج:", data);
@@ -45,10 +47,7 @@ app.post("/api/booking", async (req, res) => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: telegramChatId,
-          text: message,
-        }),
+        body: JSON.stringify({ chat_id: telegramChatId, text: message }),
       },
     );
 
@@ -80,10 +79,63 @@ app.post("/api/booking", async (req, res) => {
   }
 });
 
-// ✅ تفاعل البوت مع المستخدم
+// ✅ معالجة رسائل البوت
 bot.on("text", async (ctx) => {
-  const userMessage = ctx.message.text.trim().toUpperCase();
+  const chatId = ctx.chat.id;
+  const text = ctx.message.text.trim();
 
+  // ✅ المرحلة 1: تسجيل السائق
+  if (text === "/register") {
+    registerState[chatId] = { step: "awaiting_name" };
+    return ctx.reply("👋 من فضلك أرسل اسمك الكامل:");
+  }
+
+  if (registerState[chatId]) {
+    const state = registerState[chatId];
+
+    if (state.step === "awaiting_name") {
+      registerState[chatId].name = text;
+      registerState[chatId].step = "awaiting_phone";
+      return ctx.reply("📞 الآن أرسل رقم هاتفك:");
+    }
+
+    if (state.step === "awaiting_phone") {
+      const phone = text;
+      const name = state.name;
+
+      try {
+        const res = await fetch(
+          `https://api.jsonbin.io/v3/b/${driversBin}/latest`,
+          {
+            headers: { "X-Master-Key": apiKey },
+          },
+        );
+        const json = await res.json();
+        const current = Array.isArray(json.record) ? json.record : [];
+
+        current.push({ chatId, name, phone });
+
+        await fetch(`https://api.jsonbin.io/v3/b/${driversBin}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Master-Key": apiKey,
+          },
+          body: JSON.stringify(current),
+        });
+
+        delete registerState[chatId];
+        return ctx.reply("✅ تم تسجيلك كسائق بنجاح.");
+      } catch (err) {
+        console.error(err);
+        return ctx.reply("❌ حدث خطأ أثناء حفظ بياناتك.");
+      }
+    }
+    return;
+  }
+
+  // ✅ البحث عن الحجز
+  const userMessage = text.toUpperCase();
   if (userMessage === "/START") {
     return ctx.reply(
       "👋 أهلًا بك! من فضلك أرسل رقم الحجز الذي وصلك (مثلاً: TXI123456)",
@@ -95,7 +147,6 @@ bot.on("text", async (ctx) => {
       const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
         headers: { "X-Master-Key": apiKey },
       });
-
       const data = await res.json();
       const bookings = data.record;
       const booking = bookings.find((b) => b.bookingId === userMessage);
@@ -121,7 +172,7 @@ bot.on("text", async (ctx) => {
         return ctx.reply(`${baseMsg}\n\n❌ تم إلغاء هذا الحجز مسبقًا.`);
       } else {
         return ctx.reply(
-          `${baseMsg}`,
+          baseMsg,
           Markup.inlineKeyboard([
             Markup.button.callback("✅ تأكيد", `confirm_${booking.bookingId}`),
             Markup.button.callback("❌ إلغاء", `cancel_${booking.bookingId}`),
@@ -139,7 +190,7 @@ bot.on("text", async (ctx) => {
   );
 });
 
-// ✅ أزرار التأكيد والإلغاء
+// ✅ التعامل مع أزرار التأكيد/الإلغاء
 bot.on("callback_query", async (ctx) => {
   const data = ctx.callbackQuery.data;
   const chatId = ctx.chat.id;
@@ -152,7 +203,6 @@ bot.on("callback_query", async (ctx) => {
       const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
         headers: { "X-Master-Key": apiKey },
       });
-
       const json = await res.json();
       const bookings = json.record;
       const index = bookings.findIndex((b) => b.bookingId === bookingId);
@@ -165,7 +215,9 @@ bot.on("callback_query", async (ctx) => {
       if (currentStatus !== "pending") {
         return ctx.answerCbQuery(
           `⚠️ تم التعامل مع هذا الحجز مسبقًا (${currentStatus})`,
-          { show_alert: true },
+          {
+            show_alert: true,
+          },
         );
       }
 
@@ -180,24 +232,22 @@ bot.on("callback_query", async (ctx) => {
         body: JSON.stringify(bookings),
       });
 
-      const msg =
+      await ctx.editMessageReplyMarkup();
+      return ctx.reply(
         action === "confirmed"
           ? "✅ تم تأكيد الحجز بنجاح."
-          : "❌ تم إلغاء الحجز.";
-
-      await ctx.editMessageReplyMarkup(); // لإزالة الأزرار بعد الضغط
-      return ctx.reply(msg);
+          : "❌ تم إلغاء الحجز.",
+      );
     } catch (err) {
       console.error(err);
       return ctx.reply("⚠️ حدث خطأ أثناء تحديث الحجز.");
     }
   }
 
-  ctx.answerCbQuery(); // أغلق الاستجابة حتى لو لم يكن الأمر معروفًا
+  ctx.answerCbQuery();
 });
 
 app.get("/", (req, res) => res.send("🚕 بوت الحجز شغال 👋"));
-
 bot.launch();
 app.listen(3000, () =>
   console.log("✅ السيرفر يعمل على http://localhost:3000"),
