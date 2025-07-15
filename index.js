@@ -24,7 +24,6 @@ app.use(express.json());
 
 const registerState = {};
 
-// ✅ استقبال طلبات الحجز
 app.post("/api/booking", async (req, res) => {
   const data = req.body;
   console.log("📦 البيانات المستلمة من النموذج:", data);
@@ -83,6 +82,7 @@ app.post("/api/booking", async (req, res) => {
 });
 
 bot.on("text", async (ctx) => {
+  console.log("📩 عميل جديد:", ctx.chat.id, ctx.message.text);
   const chatId = ctx.chat.id;
   const text = ctx.message.text.trim();
 
@@ -153,6 +153,41 @@ bot.on("text", async (ctx) => {
 
       if (!booking) return ctx.reply("❌ لم يتم العثور على حجز بهذا الرقم.");
 
+      // ✅ تسجيل chatId في Bin users تلقائيًا
+      if (usersBin) {
+        try {
+          const usersRes = await fetch(
+            `https://api.jsonbin.io/v3/b/${usersBin}/latest`,
+            {
+              headers: { "X-Master-Key": apiKey },
+            },
+          );
+          const usersData = await usersRes.json();
+          const users = usersData.record;
+
+          const alreadyExists = users.some(
+            (u) => u.phone === booking.phone || u.chatId === chatId,
+          );
+
+          if (!alreadyExists) {
+            users.push({ phone: booking.phone, chatId });
+
+            await fetch(`https://api.jsonbin.io/v3/b/${usersBin}`, {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Master-Key": apiKey,
+              },
+              body: JSON.stringify(users),
+            });
+
+            console.log(`✅ تم ربط رقم ${booking.phone} بـ chatId: ${chatId}`);
+          }
+        } catch (e) {
+          console.error("❌ فشل في تحديث Bin المستخدمين:", e);
+        }
+      }
+
       const baseMsg = `✅ تفاصيل حجزك:
 
 🆔 رقم الحجز: ${booking.bookingId}
@@ -191,147 +226,3 @@ bot.on("text", async (ctx) => {
     "❓ لم أفهم رسالتك. أرسل /start أو رقم الحجز مثل: TXI123456",
   );
 });
-
-bot.on("callback_query", async (ctx) => {
-  const data = ctx.callbackQuery.data;
-  const chatId = ctx.chat.id;
-
-  if (data.startsWith("accept_")) {
-    const bookingId = data.split("_")[1];
-    const driverChatId = ctx.from.id;
-
-    try {
-      const driverRes = await fetch(
-        `https://api.jsonbin.io/v3/b/${driversBin}/latest`,
-        {
-          headers: { "X-Master-Key": apiKey },
-        },
-      );
-      const driverJson = await driverRes.json();
-      const drivers = driverJson.record;
-      const driver = drivers.find((d) => d.chatId === driverChatId);
-
-      if (!driver) {
-        await ctx.editMessageReplyMarkup();
-        return ctx.reply("❌ لم يتم العثور على حسابك كسائق");
-      }
-
-      const bookingsRes = await fetch(
-        `https://api.jsonbin.io/v3/b/${binId}/latest`,
-        {
-          headers: { "X-Master-Key": apiKey },
-        },
-      );
-      const bookingsJson = await bookingsRes.json();
-      const bookings = bookingsJson.record;
-      const index = bookings.findIndex((b) => b.bookingId === bookingId);
-
-      if (index === -1) {
-        await ctx.editMessageReplyMarkup();
-        return ctx.reply("❌ الحجز غير موجود.");
-      }
-
-      const status = bookings[index].status;
-      if (status !== "pending") {
-        await ctx.editMessageReplyMarkup();
-        return ctx.reply(`⚠️ هذا الحجز تمت معالجته مسبقًا (${status}).`);
-      }
-
-      bookings[index].status = "accepted";
-      bookings[index].driverChatId = driverChatId;
-      bookings[index].driverPhone = driver.phone;
-
-      await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Master-Key": apiKey,
-        },
-        body: JSON.stringify(bookings),
-      });
-
-      await ctx.editMessageReplyMarkup();
-      await ctx.reply("✅ تم قبول الحجز بنجاح.");
-
-      // إشعار العميل
-      const clientPhone = bookings[index].phone;
-      if (usersBin) {
-        const userListRes = await fetch(
-          `https://api.jsonbin.io/v3/b/${usersBin}/latest`,
-          {
-            headers: { "X-Master-Key": apiKey },
-          },
-        );
-        const userListJson = await userListRes.json();
-        const users = userListJson.record;
-        const matchedUser = users.find((u) => u.phone === clientPhone);
-
-        if (matchedUser) {
-          const driverName = driver.name || "سائق";
-          const messageToClient = `🚖 تم قبول حجزك بنجاح من طرف السائق: ${driverName}
-
-🆔 رقم الحجز: ${bookings[index].bookingId}
-📍 من: ${bookings[index].pickup}
-🎯 إلى: ${bookings[index].destination}
-📅 التاريخ: ${bookings[index].date}
-⏰ الوقت: ${bookings[index].time}`;
-
-          await bot.telegram.sendMessage(matchedUser.chatId, messageToClient);
-        }
-      }
-    } catch (err) {
-      console.error("❌ خطأ أثناء قبول الحجز:", err);
-      await ctx.reply("⚠️ حدث خطأ أثناء قبول الحجز.");
-    }
-  }
-
-  if (data.startsWith("cancel_")) {
-    const bookingId = data.split("_")[1];
-
-    try {
-      const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
-        headers: { "X-Master-Key": apiKey },
-      });
-      const json = await res.json();
-      const bookings = json.record;
-      const index = bookings.findIndex((b) => b.bookingId === bookingId);
-
-      if (index === -1) return ctx.answerCbQuery("❌ لم يتم العثور على الحجز.");
-      const currentStatus = bookings[index].status;
-
-      if (currentStatus !== "pending") {
-        return ctx.answerCbQuery(
-          `⚠️ تم التعامل مع هذا الحجز مسبقًا (${currentStatus})`,
-          {
-            show_alert: true,
-          },
-        );
-      }
-
-      bookings[index].status = "cancelled";
-
-      await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Master-Key": apiKey,
-        },
-        body: JSON.stringify(bookings),
-      });
-
-      await ctx.editMessageReplyMarkup();
-      return ctx.reply("❌ تم إلغاء الحجز.");
-    } catch (err) {
-      console.error(err);
-      return ctx.reply("⚠️ حدث خطأ أثناء تحديث الحجز.");
-    }
-  }
-
-  ctx.answerCbQuery();
-});
-
-app.get("/", (req, res) => res.send("🚕 بوت الحجز شغال 👋"));
-bot.launch();
-app.listen(3000, () =>
-  console.log("✅ السيرفر يعمل على http://localhost:3000"),
-);
