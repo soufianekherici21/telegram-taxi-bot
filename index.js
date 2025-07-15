@@ -1,4 +1,5 @@
-// ✅ كود بوت الحجز النهائي الكامل - بدون زر "تأكيد" للعميل
+// ✅ index.js - نسخة محدثة بالكامل مع منطق: لا يمكن للعميل تأكيد الحجز فقط الإلغاء
+
 const { Telegraf, Markup } = require("telegraf");
 const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
@@ -14,13 +15,7 @@ const apiKey = process.env.JSONBIN_API_KEY;
 const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 
 const app = express();
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"],
-  }),
-);
+app.use(cors());
 app.use(express.json());
 
 const registerState = {};
@@ -28,7 +23,6 @@ const registerState = {};
 // ✅ استقبال طلبات الحجز
 app.post("/api/booking", async (req, res) => {
   const data = req.body;
-  console.log("📦 البيانات المستلمة من النموذج:", data);
 
   const message = `🚖 تم تسجيل حجز جديد\n\n🆔 رقم الحجز: ${data.bookingId}\n📍 مكان الركوب: ${data.pickup}\n🎯 الوجهة: ${data.destination}\n📅 التاريخ: ${data.date}\n⏰ الوقت: ${data.time}\n🚗 نوع السيارة: ${data.car}\n💰 السعر: ${data.price} دج\n👤 الاسم: ${data.name}\n📞 الهاتف: ${data.phone}\n👥 عدد الركاب: ${data.passengers}`;
 
@@ -72,42 +66,46 @@ app.post("/api/booking", async (req, res) => {
   }
 });
 
-// ✅ تسجيل العملاء والسائقين
+// ✅ معالجة رسائل البوت
 bot.on("text", async (ctx) => {
   const chatId = ctx.chat.id;
   const text = ctx.message.text.trim();
 
-  // حفظ رقم العميل تلقائيًا
-  try {
-    const usersRes = await fetch(
-      `https://api.jsonbin.io/v3/b/${usersBin}/latest`,
-      {
-        headers: { "X-Master-Key": apiKey },
-      },
-    );
-    const usersJson = await usersRes.json();
-    const users = Array.isArray(usersJson.record) ? usersJson.record : [];
-    const existingUser = users.find((u) => u.chatId === chatId);
-    if (!existingUser) {
-      const phonePattern = /^\+?\d{9,15}$/;
-      users.push({ chatId, phone: text.match(phonePattern) ? text : "" });
-      await fetch(`https://api.jsonbin.io/v3/b/${usersBin}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Master-Key": apiKey,
+  // تسجيل الرقم تلقائيًا
+  if (/^\+?\d{9,13}$/.test(text)) {
+    const phone = text.replace(/\s/g, "");
+    try {
+      const res = await fetch(
+        `https://api.jsonbin.io/v3/b/${usersBin}/latest`,
+        {
+          headers: { "X-Master-Key": apiKey },
         },
-        body: JSON.stringify(users),
-      });
+      );
+      const json = await res.json();
+      const current = Array.isArray(json.record) ? json.record : [];
+
+      const existing = current.find((u) => u.chatId === chatId);
+      if (!existing) {
+        current.push({ chatId, phone });
+        await fetch(`https://api.jsonbin.io/v3/b/${usersBin}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Master-Key": apiKey,
+          },
+          body: JSON.stringify(current),
+        });
+      }
+    } catch (err) {
+      console.error("فشل في ربط الهاتف:", err);
     }
-  } catch (e) {
-    console.error("فشل حفظ المستخدم تلقائيًا:", e.message);
+    return ctx.reply("✅ تم ربط رقم هاتفك.");
   }
 
   const userMessage = text.toUpperCase();
   if (userMessage === "/START") {
     return ctx.reply(
-      "👋 أهلًا بك! من فضلك أرسل رقم الحجز الذي وصلك (مثلاً: TXI123456)",
+      "👋 أرسل رقم الحجز (مثلاً: TXI123456) لرؤية التفاصيل أو إلغائه.",
     );
   }
 
@@ -128,9 +126,19 @@ bot.on("text", async (ctx) => {
         return ctx.reply(`${baseMsg}\n\n✅ تم تأكيد هذا الحجز مسبقًا.`);
       } else if (booking.status === "cancelled") {
         return ctx.reply(`${baseMsg}\n\n❌ تم إلغاء هذا الحجز مسبقًا.`);
+      } else if (booking.status === "accepted") {
+        return ctx.reply(
+          `${baseMsg}\n\n🚖 تم قبول حجزك من طرف السائق. يمكنك الإلغاء إن أردت.`,
+          Markup.inlineKeyboard([
+            Markup.button.callback(
+              "❌ إلغاء الحجز",
+              `cancel_${booking.bookingId}`,
+            ),
+          ]),
+        );
       } else {
         return ctx.reply(
-          `${baseMsg}\n\n${booking.status === "accepted" ? "🚖 تم قبول الحجز من طرف أحد السائقين. يمكنك إلغاؤه إن أردت." : "⚠️ حجزك قيد الانتظار. يمكنك الإلغاء في أي وقت."}`,
+          `${baseMsg}\n\n⚠️ حجزك قيد الانتظار. يمكنك الإلغاء في أي وقت.`,
           Markup.inlineKeyboard([
             Markup.button.callback(
               "❌ إلغاء الحجز",
@@ -145,12 +153,10 @@ bot.on("text", async (ctx) => {
     }
   }
 
-  return ctx.reply(
-    "❓ لم أفهم رسالتك. أرسل /start أو رقم الحجز مثل: TXI123456",
-  );
+  return ctx.reply("❓ أرسل /start أو رقم الحجز مثل: TXI123456");
 });
 
-// ✅ المعالجة التفاعلية
+// ✅ أزرار القبول/الإلغاء/تأكيد السائق
 bot.on("callback_query", async (ctx) => {
   const data = ctx.callbackQuery.data;
   const chatId = ctx.chat.id;
@@ -169,7 +175,7 @@ bot.on("callback_query", async (ctx) => {
       const driverJson = await driverRes.json();
       const drivers = driverJson.record;
       const driver = drivers.find((d) => d.chatId === driverChatId);
-      if (!driver) return ctx.reply("❌ لم يتم العثور على حسابك كسائق");
+      if (!driver) return ctx.reply("❌ لم يتم العثور على حسابك كسائق.");
 
       const bookingsRes = await fetch(
         `https://api.jsonbin.io/v3/b/${binId}/latest`,
@@ -180,34 +186,16 @@ bot.on("callback_query", async (ctx) => {
       const bookingsJson = await bookingsRes.json();
       const bookings = bookingsJson.record;
       const index = bookings.findIndex((b) => b.bookingId === bookingId);
-      if (index === -1) return ctx.reply("❌ لم يتم العثور على الحجز.");
+      if (index === -1) return ctx.reply("❌ الحجز غير موجود.");
 
-      if (bookings[index].status !== "pending") {
-        return ctx.reply(
-          `⚠️ تم التعامل مع هذا الحجز مسبقًا (${bookings[index].status})`,
-        );
-      }
+      const status = bookings[index].status;
+      if (status !== "pending")
+        return ctx.reply(`⚠️ هذا الحجز تمت معالجته مسبقًا (${status}).`);
 
       bookings[index].status = "accepted";
       bookings[index].driverChatId = driverChatId;
       bookings[index].driverPhone = driver.phone;
       bookings[index].driverName = driver.name;
-
-      // إرسال إشعار للعميل
-      const clientPhone = bookings[index].phone;
-      const userListRes = await fetch(
-        `https://api.jsonbin.io/v3/b/${usersBin}/latest`,
-        {
-          headers: { "X-Master-Key": apiKey },
-        },
-      );
-      const userListJson = await userListRes.json();
-      const users = userListJson.record;
-      const matchedUser = users.find((u) => u.phone === clientPhone);
-      if (matchedUser) {
-        const msg = `🚖 تم قبول حجزك من طرف السائق: ${driver.name}\n\n🆔 رقم الحجز: ${bookings[index].bookingId}\n📍 من: ${bookings[index].pickup}\n🎯 إلى: ${bookings[index].destination}\n📅 ${bookings[index].date} - ${bookings[index].time}`;
-        await bot.telegram.sendMessage(matchedUser.chatId, msg);
-      }
 
       await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
         method: "PUT",
@@ -218,11 +206,34 @@ bot.on("callback_query", async (ctx) => {
         body: JSON.stringify(bookings),
       });
 
+      // إشعار للعميل
+      const clientPhone = bookings[index].phone;
+      const userListRes = await fetch(
+        `https://api.jsonbin.io/v3/b/${usersBin}/latest`,
+        {
+          headers: { "X-Master-Key": apiKey },
+        },
+      );
+      const userListJson = await userListRes.json();
+      const users = userListJson.record;
+      const matchedUser = users.find((u) => u.phone === clientPhone);
+
+      if (matchedUser) {
+        const messageToClient = `🚖 تم قبول حجزك من طرف السائق: ${driver.name}
+
+🆔 رقم الحجز: ${bookings[index].bookingId}
+📍 من: ${bookings[index].pickup}
+🎯 إلى: ${bookings[index].destination}
+📅 التاريخ: ${bookings[index].date}
+⏰ الوقت: ${bookings[index].time}`;
+        await bot.telegram.sendMessage(matchedUser.chatId, messageToClient);
+      }
+
       await ctx.editMessageReplyMarkup();
-      await ctx.reply("✅ تم قبول الحجز بنجاح.");
+      return ctx.reply("✅ تم قبول الحجز بنجاح.");
     } catch (err) {
       console.error(err);
-      await ctx.reply("⚠️ حدث خطأ أثناء قبول الحجز.");
+      return ctx.reply("⚠️ حدث خطأ أثناء قبول الحجز.");
     }
   }
 
@@ -235,8 +246,8 @@ bot.on("callback_query", async (ctx) => {
       const json = await res.json();
       const bookings = json.record;
       const index = bookings.findIndex((b) => b.bookingId === bookingId);
-      if (index === -1) return ctx.answerCbQuery("❌ الحجز غير موجود.");
 
+      if (index === -1) return ctx.answerCbQuery("❌ لم يتم العثور على الحجز.");
       bookings[index].status = "cancelled";
 
       await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
@@ -249,10 +260,10 @@ bot.on("callback_query", async (ctx) => {
       });
 
       await ctx.editMessageReplyMarkup();
-      return ctx.reply("❌ تم إلغاء الحجز بنجاح.");
+      return ctx.reply("❌ تم إلغاء الحجز.");
     } catch (err) {
       console.error(err);
-      return ctx.reply("⚠️ فشل أثناء محاولة الإلغاء.");
+      return ctx.reply("⚠️ حدث خطأ أثناء إلغاء الحجز.");
     }
   }
 
