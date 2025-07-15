@@ -3,10 +3,23 @@ const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
 require("dotenv").config();
 
+const express = require("express");
+const cors = require("cors");
+const app = express();
+
 const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
 const binId = process.env.JSONBIN_BOOKINGS_ID;
 const apiKey = process.env.JSONBIN_API_KEY;
 const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+
+// ✅ تفعيل CORS للسماح لبلوجر بإرسال الطلبات
+app.use(
+  cors({
+    origin: "https://taxi-booking2.blogspot.com", // 👈 أو " * " مؤقتًا للتجربة فقط
+  }),
+);
+
+app.use(express.json());
 
 // ✅ عند إرسال رسالة في البوت
 bot.on("text", async (ctx) => {
@@ -57,16 +70,14 @@ bot.on("text", async (ctx) => {
   );
 });
 
-// ✅ إبقاء السيرفر شغال
-const express = require("express");
-const app = express();
-app.use(express.json());
+// ✅ عرض رسالة عند فتح السيرفر
 app.get("/", (req, res) => res.send("🚕 بوت الحجز شغال 👋"));
 
-// ✅ استقبال الحجوزات من موقعك
+// ✅ استقبال الحجوزات من الموقع
 app.post("/api/booking", async (req, res) => {
   const data = req.body;
   console.log("📦 البيانات المستلمة من النموذج:", data);
+
   const message = `🚖 تم تسجيل حجز جديد
 
 🆔 رقم الحجز: ${data.bookingId}
@@ -81,19 +92,17 @@ app.post("/api/booking", async (req, res) => {
 👥 عدد الركاب: ${data.passengers}`;
 
   try {
+    // إرسال إلى Telegram
     await fetch(
       `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: telegramChatId,
-          text: message,
-        }),
+        body: JSON.stringify({ chat_id: telegramChatId, text: message }),
       },
     );
 
-    // جلب البيانات الحالية
+    // جلب البيانات القديمة
     const resBin = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
       headers: { "X-Master-Key": apiKey },
     });
@@ -124,6 +133,7 @@ app.post("/api/booking", async (req, res) => {
   }
 });
 
+// ✅ تشغيل البوت والسيرفر
 bot.launch();
 app.listen(3000, () =>
   console.log("✅ السيرفر يعمل على http://localhost:3000"),
