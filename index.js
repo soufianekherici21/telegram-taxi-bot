@@ -230,12 +230,16 @@ bot.on("callback_query", async (ctx) => {
       const bookings = bookingsJson.record;
 
       const index = bookings.findIndex((b) => b.bookingId === bookingId);
-      if (index === -1) return ctx.answerCbQuery("❌ الحجز غير موجود.");
+      if (index === -1) {
+        await ctx.editMessageReplyMarkup();
+        return ctx.reply("❌ الحجز غير موجود.");
+      }
 
       if (bookings[index].status !== "pending") {
-        return ctx.answerCbQuery("⚠️ هذا الحجز تمت معالجته مسبقًا", {
-          show_alert: true,
-        });
+        await ctx.editMessageReplyMarkup(); // حذف الأزرار
+        return ctx.reply(
+          `⚠️ هذا الحجز تمت معالجته مسبقًا (${bookings[index].status}).`,
+        );
       }
 
       // تحديث الحجز
