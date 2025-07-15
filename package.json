@@ -1,18 +1,12 @@
-
 {
-  "name": "taxi-booking-api",
-  "version": "1.0.0",
-  "description": "Simple taxi booking API with JSONBin integration",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node index.js"
   },
   "dependencies": {
+    "telegraf": "^4.12.2",
     "express": "^4.18.2",
-    "axios": "^1.5.0"
-  },
-  "keywords": ["taxi", "booking", "api", "jsonbin"],
-  "author": "",
-  "license": "ISC"
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2"
+  }
 }
