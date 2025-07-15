@@ -42,14 +42,16 @@ app.post("/api/booking", async (req, res) => {
 👥 عدد الركاب: ${data.passengers}`;
 
   try {
-    await fetch(
-      `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: telegramChatId, text: message }),
+    await bot.telegram.sendMessage(telegramChatId, message, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅ قبول", callback_data: `accept_${data.bookingId}` },
+            { text: "❌ رفض", callback_data: `reject_${data.bookingId}` },
+          ],
+        ],
       },
-    );
+    });
 
     const resBin = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
       headers: { "X-Master-Key": apiKey },
@@ -194,6 +196,73 @@ bot.on("text", async (ctx) => {
 bot.on("callback_query", async (ctx) => {
   const data = ctx.callbackQuery.data;
   const chatId = ctx.chat.id;
+
+  if (data.startsWith("accept_")) {
+    const bookingId = data.split("_")[1];
+    const driverChatId = ctx.from.id;
+
+    try {
+      // جلب قائمة السائقين
+      const driverRes = await fetch(
+        `https://api.jsonbin.io/v3/b/${process.env.JSONBIN_DRIVERS_ID}/latest`,
+        {
+          headers: { "X-Master-Key": apiKey },
+        },
+      );
+      const driverJson = await driverRes.json();
+      const drivers = driverJson.record;
+
+      const driver = drivers.find((d) => d.chatId === driverChatId);
+      if (!driver) {
+        return ctx.answerCbQuery("❌ لم يتم العثور على حسابك كسائق", {
+          show_alert: true,
+        });
+      }
+
+      // جلب الحجز
+      const bookingsRes = await fetch(
+        `https://api.jsonbin.io/v3/b/${binId}/latest`,
+        {
+          headers: { "X-Master-Key": apiKey },
+        },
+      );
+      const bookingsJson = await bookingsRes.json();
+      const bookings = bookingsJson.record;
+
+      const index = bookings.findIndex((b) => b.bookingId === bookingId);
+      if (index === -1) return ctx.answerCbQuery("❌ الحجز غير موجود.");
+
+      if (bookings[index].status !== "pending") {
+        return ctx.answerCbQuery("⚠️ هذا الحجز تمت معالجته مسبقًا", {
+          show_alert: true,
+        });
+      }
+
+      // تحديث الحجز
+      bookings[index].status = "accepted";
+      bookings[index].driverChatId = driverChatId;
+      bookings[index].driverPhone = driver.phone;
+
+      // حفظ التحديث
+      await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Master-Key": apiKey,
+        },
+        body: JSON.stringify(bookings),
+      });
+
+      await ctx.editMessageReplyMarkup(); // حذف الأزرار
+      await ctx.reply("✅ تم قبول الحجز بنجاح.");
+
+      // إعلام العميل (اختياري)
+      // يمكنك لاحقًا ربط رقم الهاتف بالعميل لإرسال رسالة خاصة له
+    } catch (err) {
+      console.error(err);
+      ctx.reply("⚠️ حدث خطأ أثناء قبول الحجز.");
+    }
+  }
 
   if (data.startsWith("confirm_") || data.startsWith("cancel_")) {
     const bookingId = data.split("_")[1];
