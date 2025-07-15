@@ -202,52 +202,42 @@ bot.on("callback_query", async (ctx) => {
     const driverChatId = ctx.from.id;
 
     try {
-      // جلب قائمة السائقين
       const driverRes = await fetch(
-        `https://api.jsonbin.io/v3/b/${process.env.JSONBIN_DRIVERS_ID}/latest`,
-        {
-          headers: { "X-Master-Key": apiKey },
-        },
+        `https://api.jsonbin.io/v3/b/${driversBin}/latest`,
+        { headers: { "X-Master-Key": apiKey } },
       );
       const driverJson = await driverRes.json();
       const drivers = driverJson.record;
-
       const driver = drivers.find((d) => d.chatId === driverChatId);
+
       if (!driver) {
-        return ctx.answerCbQuery("❌ لم يتم العثور على حسابك كسائق", {
-          show_alert: true,
-        });
+        await ctx.editMessageReplyMarkup(); // ✅ إزالة الأزرار
+        return ctx.reply("❌ لم يتم العثور على حسابك كسائق");
       }
 
-      // جلب الحجز
       const bookingsRes = await fetch(
         `https://api.jsonbin.io/v3/b/${binId}/latest`,
-        {
-          headers: { "X-Master-Key": apiKey },
-        },
+        { headers: { "X-Master-Key": apiKey } },
       );
       const bookingsJson = await bookingsRes.json();
       const bookings = bookingsJson.record;
-
       const index = bookings.findIndex((b) => b.bookingId === bookingId);
+
       if (index === -1) {
         await ctx.editMessageReplyMarkup();
         return ctx.reply("❌ الحجز غير موجود.");
       }
 
-      if (bookings[index].status !== "pending") {
-        await ctx.editMessageReplyMarkup(); // حذف الأزرار
-        return ctx.reply(
-          `⚠️ هذا الحجز تمت معالجته مسبقًا (${bookings[index].status}).`,
-        );
+      const status = bookings[index].status;
+      if (status !== "pending") {
+        await ctx.editMessageReplyMarkup(); // ✅ إزالة الأزرار
+        return ctx.reply(`⚠️ هذا الحجز تمت معالجته مسبقًا (${status}).`);
       }
 
-      // تحديث الحجز
       bookings[index].status = "accepted";
       bookings[index].driverChatId = driverChatId;
       bookings[index].driverPhone = driver.phone;
 
-      // حفظ التحديث
       await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
         method: "PUT",
         headers: {
@@ -257,14 +247,11 @@ bot.on("callback_query", async (ctx) => {
         body: JSON.stringify(bookings),
       });
 
-      await ctx.editMessageReplyMarkup(); // حذف الأزرار
+      await ctx.editMessageReplyMarkup();
       await ctx.reply("✅ تم قبول الحجز بنجاح.");
-
-      // إعلام العميل (اختياري)
-      // يمكنك لاحقًا ربط رقم الهاتف بالعميل لإرسال رسالة خاصة له
     } catch (err) {
       console.error(err);
-      ctx.reply("⚠️ حدث خطأ أثناء قبول الحجز.");
+      await ctx.reply("⚠️ حدث خطأ أثناء قبول الحجز.");
     }
   }
 
