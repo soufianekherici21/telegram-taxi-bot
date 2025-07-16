@@ -153,7 +153,6 @@ bot.on("text", async (ctx) => {
 
       if (!booking) return ctx.reply("❌ لم يتم العثور على حجز بهذا الرقم.");
 
-      // ✅ تسجيل chatId في Bin users تلقائيًا
       if (usersBin) {
         try {
           const usersRes = await fetch(
