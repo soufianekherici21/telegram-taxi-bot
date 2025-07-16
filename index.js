@@ -24,6 +24,22 @@ app.use(express.json());
 
 const registerState = {};
 
+// دالة مساعده للبحث عن chatId العميل حسب رقم الهاتف
+async function getUserChatIdByPhone(phone) {
+  try {
+    const res = await fetch(`https://api.jsonbin.io/v3/b/${usersBin}/latest`, {
+      headers: { "X-Master-Key": apiKey },
+    });
+    const json = await res.json();
+    const users = json.record;
+    const user = users.find((u) => u.phone === phone);
+    return user?.chatId || null;
+  } catch (err) {
+    console.error("❌ فشل في جلب usersBin:", err);
+    return null;
+  }
+}
+
 app.post("/api/booking", async (req, res) => {
   const data = req.body;
   console.log("📦 البيانات المستلمة من النموذج:", data);
@@ -78,6 +94,56 @@ app.post("/api/booking", async (req, res) => {
   } catch (err) {
     console.error("❌ فشل في الحفظ أو الإرسال:", err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+bot.on("callback_query", async (ctx) => {
+  const data = ctx.callbackQuery.data;
+
+  if (data.startsWith("accept_")) {
+    const bookingId = data.split("_")[1];
+
+    try {
+      const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
+        headers: { "X-Master-Key": apiKey },
+      });
+      const json = await res.json();
+      const bookings = json.record;
+
+      const index = bookings.findIndex((b) => b.bookingId === bookingId);
+      if (index === -1) return ctx.reply("❌ لم يتم العثور على الحجز.");
+
+      const booking = bookings[index];
+      bookings[index].status = "accepted";
+      bookings[index].driverChatId = ctx.from.id;
+
+      await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Master-Key": apiKey,
+        },
+        body: JSON.stringify(bookings),
+      });
+
+      const userChatId = await getUserChatIdByPhone(booking.phone);
+
+      if (userChatId) {
+        const message = `🚖 تم قبول حجزك بنجاح!\n\n🆔 رقم الحجز: ${booking.bookingId}\n📍 من: ${booking.pickup}\n🎯 إلى: ${booking.destination}\n⏰ الوقت: ${booking.time}`;
+        await bot.telegram.sendMessage(userChatId, message);
+      } else {
+        console.warn("⚠️ لم يتم العثور على chatId للعميل.");
+      }
+
+      return ctx.reply("✅ تم قبول الحجز وتم إشعار العميل.");
+    } catch (err) {
+      console.error("❌ خطأ أثناء قبول الحجز:", err);
+      return ctx.reply("❌ حدث خطأ أثناء معالجة القبول.");
+    }
+  }
+
+  if (data.startsWith("reject_")) {
+    return ctx.reply("❌ تم رفض الحجز.");
   }
 });
 
@@ -225,6 +291,7 @@ bot.on("text", async (ctx) => {
     "❓ لم أفهم رسالتك. أرسل /start أو رقم الحجز مثل: TXI123456",
   );
 });
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 السيرفر شغال على المنفذ ${PORT}`);
