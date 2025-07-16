@@ -295,5 +295,5 @@ bot.on("text", async (ctx) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 السيرفر شغال على المنفذ ${PORT}`);
-  bot.launch().then(() => console.log("🤖 بوت التليغرام شغال"));
+  // bot.launch().then(() => console.log("🤖 بوت التليغرام شغال"));
 });
