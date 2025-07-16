@@ -4,7 +4,9 @@
   "description": "Telegram bot for taxi booking with Express API",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "client": "node clientBot.js",
+    "driver": "node driverBot.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
