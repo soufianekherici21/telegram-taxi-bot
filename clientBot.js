@@ -1,15 +1,23 @@
-
 const { Telegraf, Markup } = require("telegraf");
 const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
 require("dotenv").config();
-
-const bot = new Telegraf(process.env.TELEGRAM_TOKEN);
+const bot = new Telegraf(process.env.TELEGRAM_CLIENT_TOKEN);
 const binId = process.env.JSONBIN_BOOKINGS_ID;
 const usersBin = process.env.JSONBIN_USERS_ID;
 const apiKey = process.env.JSONBIN_API_KEY;
 
-// دالة مساعدة للبحث عن chatId العميل حسب رقم الهاتف
+// ❌ حذف Webhook لتفادي تعارضات
+bot.telegram
+  .deleteWebhook()
+  .then(() => {
+    console.log("✅ Webhook تم حذفه بنجاح");
+  })
+  .catch((err) => {
+    console.warn("⚠️ فشل في حذف Webhook:", err.message);
+  });
+
+// 🧠 دالة مساعدة لجلب chatId من رقم الهاتف
 async function getUserChatIdByPhone(phone) {
   try {
     const res = await fetch(`https://api.jsonbin.io/v3/b/${usersBin}/latest`, {
@@ -27,52 +35,6 @@ async function getUserChatIdByPhone(phone) {
 
 bot.on("callback_query", async (ctx) => {
   const data = ctx.callbackQuery.data;
-
-  if (data.startsWith("accept_")) {
-    const bookingId = data.split("_")[1];
-
-    try {
-      const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
-        headers: { "X-Master-Key": apiKey },
-      });
-      const json = await res.json();
-      const bookings = json.record;
-
-      const index = bookings.findIndex((b) => b.bookingId === bookingId);
-      if (index === -1) return ctx.reply("❌ لم يتم العثور على الحجز.");
-
-      const booking = bookings[index];
-      bookings[index].status = "accepted";
-      bookings[index].driverChatId = ctx.from.id;
-
-      await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Master-Key": apiKey,
-        },
-        body: JSON.stringify(bookings),
-      });
-
-      const userChatId = await getUserChatIdByPhone(booking.phone);
-
-      if (userChatId) {
-        const message = `🚖 تم قبول حجزك بنجاح!\n\n🆔 رقم الحجز: ${booking.bookingId}\n📍 من: ${booking.pickup}\n🎯 إلى: ${booking.destination}\n⏰ الوقت: ${booking.time}`;
-        await bot.telegram.sendMessage(userChatId, message);
-      } else {
-        console.warn("⚠️ لم يتم العثور على chatId للعميل.");
-      }
-
-      return ctx.reply("✅ تم قبول الحجز وتم إشعار العميل.");
-    } catch (err) {
-      console.error("❌ خطأ أثناء قبول الحجز:", err);
-      return ctx.reply("❌ حدث خطأ أثناء معالجة القبول.");
-    }
-  }
-
-  if (data.startsWith("reject_")) {
-    return ctx.reply("❌ تم رفض الحجز.");
-  }
 
   if (data.startsWith("cancel_")) {
     const bookingId = data.split("_")[1];
@@ -107,28 +69,26 @@ bot.on("callback_query", async (ctx) => {
 });
 
 bot.on("text", async (ctx) => {
-  console.log("📩 عميل جديد:", ctx.chat.id, ctx.message.text);
   const chatId = ctx.chat.id;
   const text = ctx.message.text.trim();
+  const upper = text.toUpperCase();
 
-  const userMessage = text.toUpperCase();
-  if (userMessage === "/START") {
-    return ctx.reply(
-      "👋 أهلًا بك! من فضلك أرسل رقم الحجز الذي وصلك (مثلاً: TXI123456)",
-    );
+  if (upper === "/START") {
+    return ctx.reply("👋 أهلًا بك! أرسل رقم الحجز الذي وصلك (مثل: TXI123456)");
   }
 
-  if (/^TXI\d{6}$/.test(userMessage)) {
+  if (/^TXI\d{6}$/.test(upper)) {
     try {
       const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
         headers: { "X-Master-Key": apiKey },
       });
       const data = await res.json();
       const bookings = data.record;
-      const booking = bookings.find((b) => b.bookingId === userMessage);
+      const booking = bookings.find((b) => b.bookingId === upper);
 
       if (!booking) return ctx.reply("❌ لم يتم العثور على حجز بهذا الرقم.");
 
+      // 🔐 تخزين رقم الهاتف + chatId في usersBin
       if (usersBin) {
         try {
           const usersRes = await fetch(
@@ -163,6 +123,7 @@ bot.on("text", async (ctx) => {
         }
       }
 
+      // 📩 رسالة تفاصيل الحجز
       const baseMsg = `✅ تفاصيل حجزك:
 
 🆔 رقم الحجز: ${booking.bookingId}
@@ -203,7 +164,7 @@ bot.on("text", async (ctx) => {
 });
 
 bot.launch().then(() => {
-  console.log("🤖 بوت التليغرام للزبائن شغال");
+  console.log("🤖 بوت الزبائن شغال");
 });
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
