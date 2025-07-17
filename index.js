@@ -58,7 +58,7 @@ app.post("/api/booking", async (req, res) => {
 
     current.push({
       ...data,
-      status: "pending",
+      status: "في الانتظار",
       createdAt: new Date().toISOString(),
     });
 
