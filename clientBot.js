@@ -29,8 +29,15 @@ bot.on("text", async (ctx) => {
     });
 
     const bookings = response.data.record;
+    const normalizePhone = (phone) =>
+      phone.replace(/\s+/g, "").replace(/^\+213/, "0");
+
+    const normalizedUserPhone = normalizePhone(userPhone);
+
     const booking = bookings.find(
-      (b) => b.phone === userPhone && b.status === "في الانتظار",
+      (b) =>
+        normalizePhone(b.phone) === normalizedUserPhone &&
+        b.status === "في الانتظار",
     );
 
     if (!booking) {
