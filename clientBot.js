@@ -1,11 +1,10 @@
 const { Telegraf, Markup } = require("telegraf");
 const axios = require("axios");
 
-const bot = new Telegraf("8138462701:AAHR0cjGDtANdcnRXeECCx0pzrodChNJbE8"); // ضع توكن بوت الزبون هنا
+const BOT_TOKEN = "🔒 ضع هنا التوكن الخاص ببوت الزبائن";
+const bot = new Telegraf(BOT_TOKEN);
 
-const BIN_ID = "686e440cdfff172fa6580e1a";
-const API_KEY = "$2a$10$vMpDP3Fww5je7/MNZOgzAOtxURMO3opCog2/MVJ9YS8W6LFy2l4JW";
-const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}/latest`;
+const API_URL = "https://telegram-taxi-bot.onrender.com/data";
 
 bot.start((ctx) => {
   ctx.reply(
@@ -14,30 +13,13 @@ bot.start((ctx) => {
 });
 
 bot.on("text", async (ctx) => {
-  const userPhone = ctx.message.text.trim();
-  if (!/^\+213\d{9}$/.test(userPhone)) {
-    return ctx.reply(
-      "⚠️ يرجى إدخال رقم هاتف صحيح يبدأ بـ +213 ويحتوي على 9 أرقام بعده.",
-    );
-  }
-
+  const phone = ctx.message.text.trim();
   try {
-    const response = await axios.get(JSONBIN_URL, {
-      headers: {
-        "X-Master-Key": API_KEY,
-      },
-    });
-
-    const bookings = response.data.record;
-    const normalizePhone = (phone) =>
-      phone.replace(/\s+/g, "").replace(/^\+213/, "0");
-
-    const normalizedUserPhone = normalizePhone(userPhone);
+    const response = await axios.get(API_URL);
+    const bookings = response.data;
 
     const booking = bookings.find(
-      (b) =>
-        normalizePhone(b.phone) === normalizedUserPhone &&
-        b.status === "في الانتظار",
+      (b) => b.phone === phone && b.status === "pending",
     );
 
     if (!booking) {
@@ -46,93 +28,65 @@ bot.on("text", async (ctx) => {
       );
     }
 
-    const bookingText = `
+    const summary = `
 📍 من: ${booking.from}
 🎯 إلى: ${booking.to}
 📅 التاريخ: ${booking.date}
 ⏰ الوقت: ${booking.time}
-🚕 نوع السيارة: ${booking.carType}
-👤 عدد الركاب: ${booking.passengers}
+🚕 النوع: ${booking.carType}
+💰 السعر: ${booking.price} دج
 📞 الهاتف: ${booking.phone}
-💰 السعر: ${booking.price}
-🔐 رقم الحجز: ${booking.code}
-    `;
+👤 عدد الركاب: ${booking.passengers}
+`;
 
     ctx.reply(
-      bookingText,
+      summary,
       Markup.inlineKeyboard([
-        Markup.button.callback("✅ تأكيد الحجز", `confirm_${booking.code}`),
-        Markup.button.callback("❌ إلغاء الحجز", `cancel_${booking.code}`),
+        Markup.button.callback("✅ تأكيد الحجز", `confirm_${booking.id}`),
+        Markup.button.callback("❌ إلغاء الحجز", `cancel_${booking.id}`),
       ]),
     );
-  } catch (error) {
-    console.error("❌ Error fetching booking:", error.message);
-    ctx.reply("⚠️ حدث خطأ أثناء جلب معلومات الحجز. حاول لاحقًا.");
+  } catch (err) {
+    ctx.reply("❌ حدث خطأ أثناء معالجة الطلب.");
   }
 });
 
-// التأكيد
-bot.action(/^confirm_(.+)/, async (ctx) => {
-  const code = ctx.match[1];
+bot.action(/confirm_(.*)/, async (ctx) => {
+  const id = ctx.match[1];
+  await updateStatus(id, "confirmed");
+  ctx.editMessageReplyMarkup(); // إخفاء الأزرار
+  ctx.reply("✅ تم تأكيد الحجز بنجاح.");
+});
 
+bot.action(/cancel_(.*)/, async (ctx) => {
+  const id = ctx.match[1];
+  await updateStatus(id, "cancelled");
+  ctx.editMessageReplyMarkup();
+  ctx.reply("❌ تم إلغاء الحجز.");
+});
+
+async function updateStatus(id, status) {
   try {
-    const response = await axios.get(JSONBIN_URL, {
+    const response = await axios.get(API_URL, {
       headers: { "X-Master-Key": API_KEY },
     });
+    let bookings = response.data.record;
 
-    const bookings = response.data.record;
-    const index = bookings.findIndex((b) => b.code === code);
-    if (index === -1 || bookings[index].status !== "في الانتظار") {
-      return ctx.reply("⚠️ لا يمكن تأكيد هذا الحجز.");
+    const index = bookings.findIndex((b) => b.id === id);
+    if (index !== -1) {
+      bookings[index].status = status;
     }
-
-    bookings[index].status = "مؤكد";
 
     await axios.put(`https://api.jsonbin.io/v3/b/${BIN_ID}`, bookings, {
       headers: {
         "Content-Type": "application/json",
         "X-Master-Key": API_KEY,
+        "X-Bin-Versioning": false,
       },
     });
-
-    ctx.editMessageReplyMarkup(); // إزالة الأزرار
-    ctx.reply("✅ تم تأكيد الحجز بنجاح. شكراً لك!");
   } catch (error) {
-    console.error("Error confirming booking:", error.message);
-    ctx.reply("⚠️ حدث خطأ أثناء تأكيد الحجز.");
+    console.error("Error updating status:", error.message);
   }
-});
-
-// الإلغاء
-bot.action(/^cancel_(.+)/, async (ctx) => {
-  const code = ctx.match[1];
-
-  try {
-    const response = await axios.get(JSONBIN_URL, {
-      headers: { "X-Master-Key": API_KEY },
-    });
-
-    const bookings = response.data.record;
-    const index = bookings.findIndex((b) => b.code === code);
-    if (index === -1 || bookings[index].status !== "في الانتظار") {
-      return ctx.reply("⚠️ لا يمكن إلغاء هذا الحجز.");
-    }
-
-    bookings[index].status = "ملغى";
-
-    await axios.put(`https://api.jsonbin.io/v3/b/${BIN_ID}`, bookings, {
-      headers: {
-        "Content-Type": "application/json",
-        "X-Master-Key": API_KEY,
-      },
-    });
-
-    ctx.editMessageReplyMarkup(); // إزالة الأزرار
-    ctx.reply("❌ تم إلغاء الحجز بنجاح.");
-  } catch (error) {
-    console.error("Error cancelling booking:", error.message);
-    ctx.reply("⚠️ حدث خطأ أثناء إلغاء الحجز.");
-  }
-});
+}
 
 bot.launch();
