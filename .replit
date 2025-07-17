@@ -7,7 +7,7 @@ localPort = 3000
 externalPort = 80
 
 [workflows]
-runButton = "Start Client Bot"
+runButton = "Start Driver Bot"
 
 [[workflows.workflow]]
 name = "Run Bot"

@@ -1,171 +1,112 @@
 const { Telegraf } = require("telegraf");
-const fetch = (...args) =>
-  import("node-fetch").then(({ default: fetch }) => fetch(...args));
+const axios = require("axios");
 require("dotenv").config();
 
-const bot = new Telegraf(process.env.TELEGRAM_DRIVER_TOKEN);
-const driversBin = process.env.JSONBIN_DRIVERS_ID;
-const bookingsBin = process.env.JSONBIN_BOOKINGS_ID;
-const apiKey = process.env.JSONBIN_API_KEY;
+const bot = new Telegraf(process.env.DRIVER_BOT_TOKEN);
 
-const registerState = {};
+// بيانات JSONBin
+const BIN_ID = process.env.JSONBIN_BIN_ID;
+const API_KEY = process.env.JSONBIN_API_KEY;
+const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
 
-// ✅ التحقق إذا السائق مسجل
-async function isDriverRegistered(chatId) {
-  try {
-    const res = await fetch(
-      `https://api.jsonbin.io/v3/b/${driversBin}/latest`,
-      {
-        headers: { "X-Master-Key": apiKey },
-      },
-    );
-    const json = await res.json();
-    const drivers = Array.isArray(json.record) ? json.record : [];
-    return drivers.some((driver) => driver.chatId === chatId);
-  } catch (err) {
-    console.error("❌ خطأ أثناء التحقق من السائق:", err);
-    return false;
-  }
+// متغيرات التخزين المؤقت
+const registrationSteps = new Map(); // chat_id => { step, name }
+
+// جلب البيانات من JSONBin
+async function fetchBookings() {
+  const res = await axios.get(BIN_URL + "/latest", {
+    headers: {
+      "X-Master-Key": API_KEY,
+    },
+  });
+  return res.data.record || [];
 }
 
-// ✅ عرض سجل الحجوزات الخاصة بالسائق
-async function getDriverBookings(chatId) {
-  try {
-    const res = await fetch(
-      `https://api.jsonbin.io/v3/b/${bookingsBin}/latest`,
-      {
-        headers: { "X-Master-Key": apiKey },
-      },
-    );
-    const json = await res.json();
-    const allBookings = json.record;
-
-    return allBookings.filter((b) => b.driverChatId === chatId);
-  } catch (err) {
-    console.error("❌ فشل في جلب الحجوزات:", err);
-    return [];
-  }
+// حفظ البيانات في JSONBin
+async function saveBookings(bookings) {
+  await axios.put(BIN_URL, bookings, {
+    headers: {
+      "Content-Type": "application/json",
+      "X-Master-Key": API_KEY,
+    },
+  });
 }
 
+// بدء البوت
+bot.start((ctx) => {
+  ctx.reply(
+    "👋 أهلًا بك في بوت تسجيل السائقين!\n\n🛠 الأوامر المتاحة:\n/register - للتسجيل كسائق جديد\n/mybookings - عرض سجل الحجوزات",
+  );
+});
+
+// أمر التسجيل
+bot.command("register", (ctx) => {
+  registrationSteps.set(ctx.chat.id, { step: "askName" });
+  ctx.reply("👋 من فضلك أرسل اسمك الكامل:");
+});
+
+// استقبال الرسائل في التسجيل
 bot.on("text", async (ctx) => {
-  const chatId = ctx.chat.id;
-  const text = ctx.message.text.trim();
+  const stepData = registrationSteps.get(ctx.chat.id);
+  if (!stepData) return;
 
-  // ⛔️ إذا مش مسجل، أظهر رسالة تحذير (إلا إذا أرسل /start أو /register)
-  if (text !== "/start" && text !== "/register") {
-    const registered = await isDriverRegistered(chatId);
-    if (!registered) {
-      return ctx.reply(
-        "⚠️ لم يتم التعرف عليك كسائق.\nمن فضلك أرسل /register للتسجيل.",
-      );
+  const text = ctx.message.text.trim();
+  const allBookings = await fetchBookings();
+
+  if (stepData.step === "askName") {
+    stepData.name = text;
+    stepData.step = "askPhone";
+    registrationSteps.set(ctx.chat.id, stepData);
+    ctx.reply("📞 الآن أرسل رقم هاتفك:");
+  } else if (stepData.step === "askPhone") {
+    const phone = text;
+    const alreadyRegistered = allBookings.some((b) => b.driverPhone === phone);
+
+    if (alreadyRegistered) {
+      ctx.reply("⚠️ أنت مسجل مسبقًا كسائق.");
+    } else {
+      allBookings.push({
+        driverName: stepData.name,
+        driverPhone: phone,
+        driverChatId: ctx.chat.id,
+        registeredAt: new Date().toISOString(),
+        driverConfirmed: true,
+      });
+      await saveBookings(allBookings);
+      ctx.reply("✅ تم تسجيلك بنجاح كسائق!");
     }
+
+    registrationSteps.delete(ctx.chat.id);
+  }
+});
+
+// أمر عرض الحجوزات
+bot.command("mybookings", async (ctx) => {
+  const allBookings = await fetchBookings();
+  const user = allBookings.find((b) => b.driverChatId === ctx.chat.id);
+
+  if (!user) {
+    ctx.reply("⚠️ لم يتم التعرف عليك كسائق.\nمن فضلك أرسل /register للتسجيل.");
+    return;
   }
 
-  // 🟢 /start
-  if (text === "/start") {
-    return ctx.reply(
-      "👋 أهلًا بك في بوت تسجيل السائقين!\n\n🛠 الأوامر المتاحة:\n/register - للتسجيل كسائق جديد\n/mybookings - عرض سجل الحجوزات",
+  const driverPhone = user.driverPhone;
+  const myBookings = allBookings.filter(
+    (b) => b.driverPhone === driverPhone && b.status === "confirmed",
+  );
+
+  if (myBookings.length === 0) {
+    ctx.reply("🚫 لا توجد حجوزات مؤكدة لك حاليًا.");
+    return;
+  }
+
+  for (const booking of myBookings) {
+    ctx.reply(
+      `📍 من: ${booking.pickup}\n🎯 إلى: ${booking.destination}\n📅 التاريخ: ${booking.date}\n⏰ الوقت: ${booking.time}\n🚗 نوع السيارة: ${booking.carType}\n💰 السعر: ${booking.price} دج\n👤 العميل: ${booking.name}\n📞 ${booking.phone}`,
     );
   }
-
-  // 🟢 /register
-  if (text === "/register") {
-    registerState[chatId] = { step: "awaiting_name" };
-    return ctx.reply("👋 من فضلك أرسل اسمك الكامل:");
-  }
-
-  // 🟢 /mybookings
-  if (text === "/mybookings") {
-    const bookings = await getDriverBookings(chatId);
-
-    if (!bookings.length) {
-      return ctx.reply("📭 لا يوجد أي حجز مسجل باسمك حتى الآن.");
-    }
-
-    for (const booking of bookings) {
-      const msg = `📦 حجز:
-
-🆔 ${booking.bookingId}
-📍 من: ${booking.pickup}
-🎯 إلى: ${booking.destination}
-📅 ${booking.date} ⏰ ${booking.time}
-👤 ${booking.name} - 📞 ${booking.phone}
-🚗 ${booking.car} | 👥 ${booking.passengers}
-💰 ${booking.price} دج
-📌 الحالة: ${booking.status}`;
-
-      await ctx.reply(msg);
-    }
-    return;
-  }
-
-  // ✅ التسجيل
-  if (registerState[chatId]) {
-    const state = registerState[chatId];
-
-    if (state.step === "awaiting_name") {
-      registerState[chatId].name = text;
-      registerState[chatId].step = "awaiting_phone";
-      return ctx.reply("📞 الآن أرسل رقم هاتفك:");
-    }
-
-    if (state.step === "awaiting_phone") {
-      const phone = text;
-      const name = state.name;
-
-      try {
-        const res = await fetch(
-          `https://api.jsonbin.io/v3/b/${driversBin}/latest`,
-          {
-            headers: { "X-Master-Key": apiKey },
-          },
-        );
-        const json = await res.json();
-        const current = Array.isArray(json.record) ? json.record : [];
-
-        const existingDriver = current.find(
-          (driver) => driver.chatId === chatId || driver.phone === phone,
-        );
-
-        if (existingDriver) {
-          delete registerState[chatId];
-          return ctx.reply("⚠️ أنت مسجل مسبقًا كسائق.");
-        }
-
-        current.push({
-          chatId,
-          name,
-          phone,
-          registeredAt: new Date().toISOString(),
-        });
-
-        await fetch(`https://api.jsonbin.io/v3/b/${driversBin}`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Master-Key": apiKey,
-          },
-          body: JSON.stringify(current),
-        });
-
-        delete registerState[chatId];
-        return ctx.reply(
-          "✅ تم تسجيلك كسائق بنجاح.\n\nسيتم إشعارك بالحجوزات الجديدة.",
-        );
-      } catch (err) {
-        console.error("❌ خطأ في تسجيل السائق:", err);
-        return ctx.reply("❌ حدث خطأ أثناء حفظ بياناتك. حاول مرة أخرى.");
-      }
-    }
-    return;
-  }
-
-  return ctx.reply("❓ لم أفهم رسالتك.\n\nاكتب /start لعرض الأوامر.");
 });
 
-bot.launch().then(() => {
-  console.log("🚗 بوت التليغرام للسائقين شغال");
-});
-
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+// تشغيل البوت
+bot.launch();
+console.log("✅ Driver bot is running.");
