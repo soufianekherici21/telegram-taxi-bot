@@ -15,6 +15,12 @@ const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 const { Telegraf } = require("telegraf");
 const bot = new Telegraf(process.env.TELEGRAM_DRIVER_TOKEN); // استخدم بوت السائقين فقط هنا
 
+// ✅ الرد على الصفحة الرئيسية (يصلح مشكلة "Cannot GET /")
+app.get("/", (req, res) => {
+  res.send("🚖 Telegram Taxi Bot is running.");
+});
+
+// ✅ استقبال الحجوزات
 app.post("/api/booking", async (req, res) => {
   const data = req.body;
   console.log("📦 البيانات المستلمة من النموذج:", data);
@@ -72,6 +78,7 @@ app.post("/api/booking", async (req, res) => {
   }
 });
 
+// ✅ الاستماع على المنفذ (مرة واحدة فقط)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 السيرفر شغال على المنفذ ${PORT}`);
